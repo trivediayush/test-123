@@ -1,47 +1,62 @@
-
 pipeline {
     agent any
 
     environment {
-        IMAGES = 'redis:7-alpine eclipse-mosquitto:2 httpd:2.4 mcr.microsoft.com/dotnet/samples:aspnetapp'
         DEPLOY_DIR = '/opt/deployment'
+
+        IMAGES = 'redis:7-alpine eclipse-mosquitto:2 httpd:2.4 mcr.microsoft.com/dotnet/samples:aspnetapp'
     }
 
     stages {
 
-        stage('Build - Pull and Save Images') {
+        stage('Checkout') {
+            steps {
+                echo 'Source code checked out from GitHub.'
+            }
+        }
+
+        stage('Build - Pull and Save Docker Images') {
             steps {
                 sh '''
                     set -e
 
-                    mkdir -p prod/docker
-                    rm -f prod/docker/*.tar
+                    cd prod/docker
+
+                    echo "Pulling required Docker images..."
 
                     for img in $IMAGES; do
-                        echo "Pulling image: $img"
                         docker pull "$img"
 
                         filename=$(echo "$img" | tr '/:' '__').tar
 
-                        echo "Saving image: $filename"
-                        docker save -o "prod/docker/$filename" "$img"
+                        echo "Saving $img as $filename"
+
+                        docker save -o "$filename" "$img"
                     done
 
-                    ls -lh prod/docker/*.tar
+                    echo "Generated image archives:"
+                    ls -lh *.tar
                 '''
             }
         }
 
-        stage('Validate Deployment Files') {
+        stage('Validate Docker Compose') {
             steps {
                 sh '''
                     set -e
 
-                    test -f prod/docker/docker-compose.yml
+                    echo "Checking required deployment files..."
 
-                    echo "Docker Compose file found."
-                    echo "Deployment files:"
-                    find prod/docker -type f
+                    test -f prod/docker/docker-compose.yml
+                    test -f prod/docker/Services/Mqtt/mosquitto.conf
+                    test -f prod/docker/Services/Portal/index.html
+                    test -f prod/docker/Services/Redis/redis.conf
+
+                    echo "Validating Compose configuration..."
+
+                    docker compose -f prod/docker/docker-compose.yml config -q
+
+                    echo "Validation successful."
                 '''
             }
         }
@@ -51,20 +66,23 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Preparing Jenkins server deployment..."
+                    echo "Preparing Jenkins deployment directory..."
 
-                    sudo mkdir -p "$DEPLOY_DIR"
-                    sudo cp -a prod/docker/. "$DEPLOY_DIR/"
-                    sudo chown -R jenkins:jenkins "$DEPLOY_DIR"
+                    mkdir -p "$DEPLOY_DIR"
+
+                    cp -a prod/docker/. "$DEPLOY_DIR/"
 
                     cd "$DEPLOY_DIR"
 
                     echo "Loading Docker images..."
+
                     for f in *.tar; do
+                        echo "Loading $f"
                         docker load -i "$f"
                     done
 
                     echo "Starting all services on Jenkins server..."
+
                     docker compose up -d
 
                     echo "Jenkins server container status:"
@@ -86,7 +104,7 @@ pipeline {
                                     removePrefix: 'prod/docker',
                                     remoteDirectory: '',
                                     execTimeout: 600000,
-                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do docker load -i "$f"; done && docker compose up -d && docker compose ps'
+                                    execCommand: 'set -e; cd /opt/deployment && echo "Loading Docker images..." && for f in *.tar; do echo "Loading $f"; docker load -i "$f"; done && echo "Starting all services..." && docker compose up -d && echo "Container status:" && docker compose ps'
                                 )
                             ]
                         )
@@ -108,7 +126,7 @@ pipeline {
                                     removePrefix: 'prod/docker',
                                     remoteDirectory: '',
                                     execTimeout: 600000,
-                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do docker load -i "$f"; done && docker compose up -d && docker compose ps'
+                                    execCommand: 'set -e; cd /opt/deployment && echo "Loading Docker images..." && for f in *.tar; do echo "Loading $f"; docker load -i "$f"; done && echo "Starting all services..." && docker compose up -d && echo "Container status:" && docker compose ps'
                                 )
                             ]
                         )
@@ -116,19 +134,20 @@ pipeline {
                 )
             }
         }
+
     }
 
     post {
         success {
-            echo 'All services deployed successfully on Jenkins and both physical servers.'
+            echo 'SUCCESS: All services deployed on all 3 servers.'
         }
 
         failure {
-            echo 'Deployment failed. Check the failed stage in Console Output.'
+            echo 'FAILED: Deployment stopped. Check the stage logs above.'
         }
 
         always {
-            echo 'Pipeline execution completed.'
+            echo 'Jenkins pipeline execution completed.'
         }
     }
 }
