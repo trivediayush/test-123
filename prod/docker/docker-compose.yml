@@ -1,0 +1,101 @@
+# Test version of the HES compose: custom hes_* images replaced with official images.
+x-common-config: &common-config
+  network_mode: host
+  restart: always
+  logging:
+    driver: "json-file"
+    options:
+      max-size: 100m
+      max-file: "5"
+
+# Placeholder for every .NET service (no source/images available): official Microsoft ASP.NET sample app.
+x-dotnet: &dotnet
+  <<: *common-config
+  image: mcr.microsoft.com/dotnet/samples:aspnetapp
+
+services:
+  # ---------- server 1 ----------
+  hes-redis:
+    <<: *common-config
+    image: redis:7-alpine
+    container_name: hes_redis_container
+    command: redis-server /usr/local/etc/redis/redis.conf
+    environment:
+      TZ: Asia/Kolkata
+    volumes:
+      - hes_redisdata:/data
+      - ./Services/Redis/redis.conf:/usr/local/etc/redis/redis.conf
+
+  mqtt-service:          # 1883 MQTT, 3000 WS
+    <<: *common-config
+    image: eclipse-mosquitto:2
+    container_name: hes-mqtt-container
+    environment:
+      TZ: Asia/Kolkata
+    volumes:
+      - ./Services/Mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - hes_mqttdata:/mosquitto/data
+
+  hes-portal:            # 80
+    <<: *common-config
+    image: httpd:2.4
+    container_name: hes-portal-container
+    environment:
+      TZ: Asia/Kolkata
+    volumes:
+      - ./Services/Portal/index.html:/usr/local/apache2/htdocs/index.html
+
+  restapi:
+    <<: *dotnet
+    container_name: hes-restapi-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5002", TZ: Asia/Kolkata }
+
+  akka-service:
+    <<: *dotnet
+    container_name: hes-akka-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:9083", TZ: Asia/Kolkata }
+
+  push-service:
+    <<: *dotnet
+    container_name: hes-push-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:4061", TZ: Asia/Kolkata }
+
+  # ---------- server 2 ----------
+  dlms-service:
+    <<: *dotnet
+    container_name: hes-dlms-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5101", TZ: Asia/Kolkata }
+
+  commissioning-service:
+    <<: *dotnet
+    container_name: hes-commissioning-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5102", TZ: Asia/Kolkata }
+
+  prepayment-service:
+    <<: *dotnet
+    container_name: hes-prepayment-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5103", TZ: Asia/Kolkata }
+
+  bridge-service:
+    <<: *dotnet
+    container_name: hes-bridge-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5104", TZ: Asia/Kolkata }
+
+  modbus-service:
+    <<: *dotnet
+    container_name: hes-modbus-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5105", TZ: Asia/Kolkata }
+
+  reader-service:
+    <<: *dotnet
+    container_name: hes-reader-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5106", TZ: Asia/Kolkata }
+
+  timer-service:
+    <<: *dotnet
+    container_name: hes-timer-container
+    environment: { ASPNETCORE_URLS: "http://0.0.0.0:5107", TZ: Asia/Kolkata }
+
+volumes:
+  hes_redisdata:
+  hes_mqttdata:
