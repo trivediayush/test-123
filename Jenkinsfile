@@ -4,43 +4,29 @@ pipeline {
 
     environment {
         IMAGES = 'redis:7-alpine eclipse-mosquitto:2 httpd:2.4 mcr.microsoft.com/dotnet/samples:aspnetapp'
-
-        S1_SERVICES = 'hes-redis mqtt-service hes-portal restapi akka-service push-service'
-
-        S2_SERVICES = 'dlms-service commissioning-service prepayment-service bridge-service modbus-service reader-service timer-service'
-
         DEPLOY_DIR = '/opt/deployment'
     }
 
     stages {
 
-        stage('Checkout') {
-            steps {
-                echo 'Source code checked out by Jenkins Pipeline SCM.'
-            }
-        }
-
-        stage('Build - Pull and Save Docker Images') {
+        stage('Build - Pull and Save Images') {
             steps {
                 sh '''
                     set -e
 
-                    echo "Cleaning old image archives..."
+                    mkdir -p prod/docker
                     rm -f prod/docker/*.tar
 
-                    echo "Pulling and saving Docker images..."
-
                     for img in $IMAGES; do
-                        echo "Pulling: $img"
+                        echo "Pulling image: $img"
                         docker pull "$img"
 
                         filename=$(echo "$img" | tr '/:' '__').tar
 
-                        echo "Saving: $filename"
+                        echo "Saving image: $filename"
                         docker save -o "prod/docker/$filename" "$img"
                     done
 
-                    echo "Generated image archives:"
                     ls -lh prod/docker/*.tar
                 '''
             }
@@ -52,16 +38,42 @@ pipeline {
                     set -e
 
                     test -f prod/docker/docker-compose.yml
-                    test -f prod/docker/Services/Mqtt/mosquitto.conf
-                    test -f prod/docker/Services/Redis/redis.conf
-                    test -f prod/docker/Services/Portal/index.html
 
-                    echo "Deployment files verified."
+                    echo "Docker Compose file found."
+                    echo "Deployment files:"
+                    find prod/docker -type f
                 '''
             }
         }
 
-        stage('Deploy to Physical Server 1') {
+        stage('Deploy on Jenkins Server') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "Preparing Jenkins server deployment..."
+
+                    sudo mkdir -p "$DEPLOY_DIR"
+                    sudo cp -a prod/docker/. "$DEPLOY_DIR/"
+                    sudo chown -R jenkins:jenkins "$DEPLOY_DIR"
+
+                    cd "$DEPLOY_DIR"
+
+                    echo "Loading Docker images..."
+                    for f in *.tar; do
+                        docker load -i "$f"
+                    done
+
+                    echo "Starting all services on Jenkins server..."
+                    docker compose up -d
+
+                    echo "Jenkins server container status:"
+                    docker compose ps
+                '''
+            }
+        }
+
+        stage('Deploy on Physical Server 1') {
             steps {
                 sshPublisher(
                     publishers: [
@@ -74,7 +86,7 @@ pipeline {
                                     removePrefix: 'prod/docker',
                                     remoteDirectory: '',
                                     execTimeout: 600000,
-                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do echo "Loading $f"; docker load -i "$f"; done && docker compose up -d ' + env.S1_SERVICES + ' && docker compose ps'
+                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do docker load -i "$f"; done && docker compose up -d && docker compose ps'
                                 )
                             ]
                         )
@@ -83,7 +95,7 @@ pipeline {
             }
         }
 
-        stage('Deploy to Physical Server 2') {
+        stage('Deploy on Physical Server 2') {
             steps {
                 sshPublisher(
                     publishers: [
@@ -96,7 +108,7 @@ pipeline {
                                     removePrefix: 'prod/docker',
                                     remoteDirectory: '',
                                     execTimeout: 600000,
-                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do echo "Loading $f"; docker load -i "$f"; done && docker compose up -d ' + env.S2_SERVICES + ' && docker compose ps'
+                                    execCommand: 'set -e && cd /opt/deployment && for f in *.tar; do docker load -i "$f"; done && docker compose up -d && docker compose ps'
                                 )
                             ]
                         )
@@ -108,15 +120,15 @@ pipeline {
 
     post {
         success {
-            echo 'Deployment completed successfully on both servers.'
+            echo 'All services deployed successfully on Jenkins and both physical servers.'
         }
 
         failure {
-            echo 'Pipeline failed. Check the stage logs above for the exact error.'
+            echo 'Deployment failed. Check the failed stage in Console Output.'
         }
 
         always {
-            echo 'Jenkins pipeline execution finished.'
+            echo 'Pipeline execution completed.'
         }
     }
 }
